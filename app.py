@@ -4,6 +4,23 @@ import numpy as np
 from PIL import Image
 from io import BytesIO  # Import BytesIO for binary data conversion
 from cv2 import dnn
+from pymongo import MongoClient
+import base64
+
+connection_string = "mongodb+srv://ravitarun2103:kF1SLaoKVkwBnQzu@cluster0.brb5i.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+
+# MongoDB setup
+def get_mongo_client():
+    return MongoClient(connection_string)
+
+# Fetch all images from MongoDB
+def fetch_images_from_db(collection):
+    images = []
+    for document in collection.find():
+        img_data = base64.b64decode(document['image'])
+        img = Image.open(BytesIO(img_data))
+        images.append((document['_id'], img, document['name']))
+    return images
 
 # Grayscale conversion
 def convert_image_to_grayscale(image):
@@ -91,37 +108,77 @@ def convert_image_to_bytes(image_pil):
 # Streamlit app
 st.title("Old Photo Enhancer")
 
+# Connect to MongoDB and fetch images
+client = get_mongo_client()
+db = client['image_database']  # Use your database name
+collection = db['images']      # Use your collection name
+images = fetch_images_from_db(collection)
+
 # Sidebar for image uploader and original image display
-with st.sidebar:
-    st.header("Upload Your Old Photo")
-    uploaded_file = st.file_uploader("Choose an image", type=["jpg", "jpeg", "png"])
-    if uploaded_file is not None:
-        input_image = Image.open(uploaded_file)
-        st.image(input_image, caption="Original Image", use_column_width=True)
+if images:
+    st.sidebar.header("Select an Image")
+    selected_image_id = None
 
-# Main page for enhanced images and download buttons
-if uploaded_file is not None:
-    input_image_cv = cv2.cvtColor(np.array(input_image), cv2.COLOR_RGB2BGR)
-    bw_image, color_image = process_image(input_image_cv)
+    # Create two-column layout within the sidebar
+    for idx, (image_id, img, name) in enumerate(images):
+        if idx % 2 == 0:
+            col1, col2 = st.sidebar.columns(2)  # Create two new columns in the sidebar
 
-    if len(bw_image.shape) == 2:
+        # Add the image and button to the appropriate column with a fixed height for the image
+        with (col1 if idx % 2 == 0 else col2):
+            # Convert the PIL image to base64
+            buffer = BytesIO()
+            img.save(buffer, format="PNG")
+            img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            
+            # Display the image with uniform height
+            st.markdown(
+                f"""
+                <div style="height: 150px; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; margin-bottom: 20px;">
+                    <img src="data:image/png;base64,{img_base64}" style="max-height: 150px; margin-bottom: 10px;">
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("Select", key=f"select_{idx}"):
+                selected_image_id = image_id
+
+    # Process the selected image
+    if selected_image_id:
+        selected_image = next(img for img_id, img, name in images if img_id == selected_image_id)
+         # Convert the selected image to base64 for HTML embedding
+        buffered = BytesIO()
+        selected_image.save(buffered, format="PNG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+        # Render the image in the center with reduced size
+        st.markdown(
+        f"""
+        <div style="text-align: center; margin-bottom: 30px;">
+            <img src="data:image/png;base64,{img_base64}" style="max-width: 300px;">
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+        # Convert to OpenCV format and process
+        input_image_cv = cv2.cvtColor(np.array(selected_image), cv2.COLOR_RGB2BGR)
+        bw_image, color_image = process_image(input_image_cv)
+
+        # Display processed images
         bw_image_pil = Image.fromarray(bw_image)
-    else:
-        bw_image_pil = Image.fromarray(cv2.cvtColor(bw_image, cv2.COLOR_BGR2RGB))
+        color_image_pil = Image.fromarray(cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB))
 
-    color_image_pil = Image.fromarray(cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB))
+        # Convert to bytes for download
+        bw_image_bytes = convert_image_to_bytes(bw_image_pil)
+        color_image_bytes = convert_image_to_bytes(color_image_pil)
 
-    # Convert the images to binary data
-    bw_image_bytes = convert_image_to_bytes(bw_image_pil)
-    color_image_bytes = convert_image_to_bytes(color_image_pil)
-
-    # Download buttons
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.download_button("Download Enhanced Black and White Image", bw_image_bytes, file_name="enhanced_bw_image.png", mime="image/png")
-        st.image(bw_image_pil, caption="Enhanced Black and White Image", use_column_width=True)
-
-    with col2:
-        st.download_button("Download Enhanced Color Image", color_image_bytes, file_name="enhanced_color_image.png", mime="image/png")
-        st.image(color_image_pil, caption="Enhanced Color Image", use_column_width=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button("Download Enhanced Black and White Image", bw_image_bytes, file_name="enhanced_bw_image.png", mime="image/png")
+            st.image(bw_image_pil, caption="Enhanced Black and White Image", use_container_width=True)
+        with col2:
+            st.download_button("Download Enhanced Color Image", color_image_bytes, file_name="enhanced_color_image.png", mime="image/png")
+            st.image(color_image_pil, caption="Enhanced Color Image", use_container_width=True)
+else:
+    st.write("No images found in the MongoDB collection.")
