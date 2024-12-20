@@ -151,6 +151,8 @@ if images:
         selected_image.save(buffered, format="PNG")
         img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
+
+        print(type(selected_image))
         # Render the image in the center with reduced size
         st.markdown(
         f"""
